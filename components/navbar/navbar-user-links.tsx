@@ -1,29 +1,55 @@
 "use client";
 
 import { UserNav } from "@/components/navbar/user-nav";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button, buttonVariants } from "@/components/ui/button";
-import Link from "next/link";
-import { FC } from "react";
+import { Button } from "@/components/ui/button";
+import { FC, useState } from "react";
 import { useUser } from "reactfire";
+import { GoogleAuthProvider, signInWithPopup } from "firebase/auth";
+import { toast } from "@/components/ui/use-toast";
+import { useAuth } from "reactfire";
 
-export const NavbarUserLinks: FC = () => {
+interface Props {
+  onSignIn?: () => void;
+}
+
+export const NavbarUserLinks: FC<Props> = ({ onSignIn }) => {
   const { data, hasEmitted } = useUser();
+  const auth = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
+
+  const doProviderSignIn = async (provider: GoogleAuthProvider) => {
+    try {
+      setIsLoading(true);
+      await signInWithPopup(auth, provider);
+      // create user in your database here
+      toast({ title: "Signed in!" });
+      onSignIn?.();
+    } catch (err: any) {
+      console.error(err);
+      toast({ title: "Error signing in", description: `${err}` });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <>
       {hasEmitted && data ? (
         <>
-          <Link href="/app" className={buttonVariants()}>
-            Dashboard
-          </Link>
           <UserNav />
         </>
       ) : (
         <>
-          <Link href="/login" className={buttonVariants()}>
-            Login / Register &rarr;
-          </Link>
+          <Button
+            className="w-full"
+            disabled={isLoading}
+            onClick={async () => {
+              const provider = new GoogleAuthProvider();
+              await doProviderSignIn(provider);
+            }}
+          >
+            Login / Register
+          </Button>
         </>
       )}
     </>

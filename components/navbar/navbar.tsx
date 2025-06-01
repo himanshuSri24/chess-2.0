@@ -1,9 +1,9 @@
 import { NavbarMobile } from "@/components/navbar/navbar-mobile";
 import { NavbarUserLinks } from "@/components/navbar/navbar-user-links";
 import { buttonVariants } from "@/components/ui/button";
-import { FishIcon, ScanTextIcon } from "lucide-react";
 import Link from "next/link";
 import { FC } from "react";
+import Image from "next/image";
 
 export const NavBar: FC = () => {
   return (
@@ -13,24 +13,18 @@ export const NavBar: FC = () => {
           <div className="flex items-center">
             <Link href="/" className="hover:opacity-80 transition-opacity">
               <div className="flex items-center">
-                <FishIcon className="w-8 h-8 mr-2 inline" />{" "}
-                <span className="text-xl font-semibold tracking-tighter text-slate-800 mr-6">
-                  Venefish
-                </span>
+                <Image
+                  src="/chess.png"
+                  alt="Dev with Coffee"
+                  width={32}
+                  height={32}
+                />
+                <div className="text-xl font-semibold tracking-tighter text-slate-800 mr-6 ml-2 whitespace-nowrap">
+                  Play Chess
+                </div>
               </div>
             </Link>
-            <div className="hidden md:flex justify-between grow">
-              <div>
-                <Link href="#1" className={buttonVariants({ variant: "link" })}>
-                  Item 1
-                </Link>
-                <Link href="#2" className={buttonVariants({ variant: "link" })}>
-                  Item 2
-                </Link>
-                <Link href="#3" className={buttonVariants({ variant: "link" })}>
-                  Item 3
-                </Link>
-              </div>
+            <div className="hidden md:flex justify-end w-full">
               <div className="flex items-center space-x-4">
                 <NavbarUserLinks />
               </div>
