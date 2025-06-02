@@ -44,15 +44,27 @@ export default function ApplicationPage() {
     piece: string;
   } | null>(null);
   const [, setVersion] = useState(0); // dummy state to force re-render
+  const [validMoves, setValidMoves] = useState<Square[]>([]);
 
   const handleDragStart = (i: number, j: number, piece: string) => {
-    setDragged({ from: getSquare(i, j), piece });
+    const from = getSquare(i, j);
+    setDragged({ from, piece });
+    // Get valid moves for this piece
+    const moves = chessRef.current.moves({ square: from, verbose: true }) as {
+      to: Square;
+    }[];
+    setValidMoves(moves.map((m) => m.to));
   };
 
   const handleDrop = (i: number, j: number) => {
     if (!dragged) return;
     const to = getSquare(i, j);
     if (dragged.from === to) return;
+    if (!validMoves.includes(to)) {
+      setDragged(null);
+      setValidMoves([]);
+      return;
+    }
     const move = chessRef.current.move({ from: dragged.from, to });
     if (move) {
       setBoard(chessRef.current.board());
@@ -60,10 +72,23 @@ export default function ApplicationPage() {
       setVersion((v) => v + 1); // force re-render
     }
     setDragged(null);
+    setValidMoves([]);
   };
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
+  const handleDragEnd = () => {
+    setDragged(null);
+    setValidMoves([]);
+  };
+
+  const handleDragOver = (
+    e: React.DragEvent<HTMLDivElement>,
+    i: number,
+    j: number
+  ) => {
+    const to = getSquare(i, j);
+    if (validMoves.includes(to)) {
+      e.preventDefault();
+    }
   };
 
   return (
@@ -95,10 +120,56 @@ export default function ApplicationPage() {
                   className={`flex items-center justify-center w-10 h-10 sm:w-14 sm:h-14 font-bold text-lg select-none transition-colors
                     ${isLight ? "bg-muted" : "bg-black"}
                     ${isLight ? "text-primary" : "text-muted-foreground"}
+                    ${
+                      validMoves.includes(getSquare(i, j))
+                        ? `shadow-[4px_4px_12px_0_rgba(0,0,0,0.35)] relative`
+                        : ""
+                    }
+                    ${
+                      validMoves.includes(getSquare(i, j)) &&
+                      chessRef.current
+                        .moves({ square: dragged?.from, verbose: true })
+                        ?.some((m) => m.to === getSquare(i, j) && m.captured)
+                        ? "bg-red-200"
+                        : ""
+                    }
+                    ${
+                      // Highlight king in check
+                      (() => {
+                        const chess = chessRef.current;
+                        if (!chess.inCheck()) return "";
+                        // Find the king's square for the side to move
+                        const turn = chess.turn();
+                        for (let row = 0; row < 8; row++) {
+                          for (let col = 0; col < 8; col++) {
+                            const sq = chess.board()[row][col];
+                            if (sq && sq.type === "k" && sq.color === turn) {
+                              if (getSquare(row, col) === getSquare(i, j)) {
+                                return "bg-red-200";
+                              }
+                            }
+                          }
+                        }
+                        return "";
+                      })()
+                    }
                   `}
                   onDrop={() => handleDrop(i, j)}
-                  onDragOver={handleDragOver}
+                  onDragOver={(e) => handleDragOver(e, i, j)}
                 >
+                  {validMoves.includes(getSquare(i, j)) && !pieceImage && (
+                    <span
+                      className={`absolute w-3 h-3 rounded-full z-30 opacity-90 pointer-events-none
+                        ${isLight ? "bg-black" : "bg-white"}
+                      `}
+                      style={{
+                        left: "50%",
+                        top: "50%",
+                        transform: "translate(-50%, -50%)",
+                        boxShadow: "0 2px 6px 0 rgba(0,0,0,0.25)",
+                      }}
+                    />
+                  )}
                   {pieceImage && (
                     <Image
                       src={pieceImage}
@@ -107,6 +178,7 @@ export default function ApplicationPage() {
                       height={50}
                       draggable
                       onDragStart={() => handleDragStart(i, j, piece)}
+                      onDragEnd={handleDragEnd}
                     />
                   )}
                 </div>
