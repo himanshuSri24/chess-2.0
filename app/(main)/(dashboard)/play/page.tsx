@@ -10,31 +10,12 @@ import {
   TableHead,
 } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
-
 import { getPiece } from "@/lib/utils";
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Chess, Square, PieceSymbol, Color } from "chess.js";
 
 const PIECES_STYLE = "governer";
-
-const INITIAL_BOARD = [
-  ["BR", "BN", "BB", "BQ", "BK", "BB", "BN", "BR"],
-  ["BP", "BP", "BP", "BP", "BP", "BP", "BP", "BP"],
-  ["", "", "", "", "", "", "", ""],
-  ["", "", "", "", "", "", "", ""],
-  ["", "", "", "", "", "", "", ""],
-  ["", "", "", "", "", "", "", ""],
-  ["WP", "WP", "WP", "WP", "WP", "WP", "WP", "WP"],
-  ["WR", "WN", "WB", "WQ", "WK", "WB", "WN", "WR"],
-];
-
-const MOVES = [
-  { move: "e4", player: "White" },
-  { move: "e5", player: "Black" },
-  { move: "Nf3", player: "White" },
-  { move: "Nc6", player: "Black" },
-  { move: "Bb5", player: "White" },
-];
 
 const PLAYER_WHITE = {
   name: "Alice",
@@ -45,27 +26,40 @@ const PLAYER_BLACK = {
   avatar: "/avatars/02.png",
 };
 
+function getSquare(i: number, j: number) {
+  // i: row (0-7), j: col (0-7), 0,0 is top left (a8)
+  const file = String.fromCharCode("a".charCodeAt(0) + j);
+  const rank = 8 - i;
+  return `${file}${rank}` as Square;
+}
+
 export default function ApplicationPage() {
-  const [board, setBoard] = useState(INITIAL_BOARD);
-  const [draggedPiece, setDraggedPiece] = useState<{
-    i: number;
-    j: number;
+  const chessRef = useRef(new Chess());
+  const [board, setBoard] = useState(chessRef.current.board());
+  const [moveHistory, setMoveHistory] = useState(
+    chessRef.current.history({ verbose: true })
+  );
+  const [dragged, setDragged] = useState<{
+    from: Square;
     piece: string;
   } | null>(null);
+  const [, setVersion] = useState(0); // dummy state to force re-render
 
   const handleDragStart = (i: number, j: number, piece: string) => {
-    setDraggedPiece({ i, j, piece });
+    setDragged({ from: getSquare(i, j), piece });
   };
 
   const handleDrop = (i: number, j: number) => {
-    if (!draggedPiece) return;
-    // Only allow dropping on empty squares for now
-    if (board[i][j] !== "") return;
-    const newBoard = board.map((row) => [...row]);
-    newBoard[draggedPiece.i][draggedPiece.j] = "";
-    newBoard[i][j] = draggedPiece.piece;
-    setBoard(newBoard);
-    setDraggedPiece(null);
+    if (!dragged) return;
+    const to = getSquare(i, j);
+    if (dragged.from === to) return;
+    const move = chessRef.current.move({ from: dragged.from, to });
+    if (move) {
+      setBoard(chessRef.current.board());
+      setMoveHistory(chessRef.current.history({ verbose: true }));
+      setVersion((v) => v + 1); // force re-render
+    }
+    setDragged(null);
   };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -89,8 +83,11 @@ export default function ApplicationPage() {
         {/* Chess Board */}
         <div className="grid grid-cols-8 grid-rows-8 gap-0.5 border-2 border-border rounded-lg overflow-hidden shadow-lg">
           {board.map((row, i) =>
-            row.map((piece, j) => {
+            row.map((square, j) => {
               const isLight = (i + j) % 2 === 1;
+              const piece = square
+                ? `${square.color.toUpperCase()}${square.type.toUpperCase()}`
+                : "";
               const pieceImage = getPiece(PIECES_STYLE, piece);
               return (
                 <div
@@ -139,18 +136,24 @@ export default function ApplicationPage() {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-12">#</TableHead>
-                <TableHead>Player</TableHead>
-                <TableHead>Move</TableHead>
+                <TableHead>White</TableHead>
+                <TableHead>Black</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {MOVES.map((m, idx) => (
-                <TableRow key={idx}>
-                  <TableCell>{idx + 1}</TableCell>
-                  <TableCell>{m.player}</TableCell>
-                  <TableCell>{m.move}</TableCell>
-                </TableRow>
-              ))}
+              {(() => {
+                const rows = [];
+                for (let i = 0; i < moveHistory.length; i += 2) {
+                  rows.push(
+                    <TableRow key={i / 2}>
+                      <TableCell>{i / 2 + 1}</TableCell>
+                      <TableCell>{moveHistory[i]?.san || ""}</TableCell>
+                      <TableCell>{moveHistory[i + 1]?.san || ""}</TableCell>
+                    </TableRow>
+                  );
+                }
+                return rows;
+              })()}
             </TableBody>
           </Table>
         </CardContent>
