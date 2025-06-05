@@ -55,6 +55,14 @@ export default function ChessBoardPage() {
       ? [...board].reverse().map((row) => [...row].reverse())
       : board;
 
+  // For ranks and files display
+  const ranks =
+    color === "black" ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  const files =
+    color === "black"
+      ? ["h", "g", "f", "e", "d", "c", "b", "a"]
+      : ["a", "b", "c", "d", "e", "f", "g", "h"];
+
   const handleDragStart = (i: number, j: number, piece: string) => {
     // If black, flip indices
     const row = color === "black" ? 7 - i : i;
@@ -121,115 +129,150 @@ export default function ChessBoardPage() {
             {PLAYER_BLACK.name}
           </span>
         </div>
-        {/* Chess Board */}
-        <div className="grid grid-cols-8 grid-rows-8 gap-0.5 border-2 border-border rounded-lg overflow-hidden shadow-lg">
-          {displayBoard.map((row, i) =>
-            row.map((square, j) => {
-              const isLight = (i + j) % 2 === 1;
-              const piece = square
-                ? `${square.color.toUpperCase()}${square.type.toUpperCase()}`
-                : "";
-              const pieceImage = getPiece(PIECES_STYLE, piece);
-              return (
+        {/* Chess Board with ranks and files */}
+        <div className="relative">
+          <div className="flex">
+            {/* Ranks (left) */}
+            <div className="flex flex-col justify-between w-6 sm:w-8 select-none">
+              {ranks.map((rank) => (
                 <div
-                  key={`${i}-${j}`}
-                  className={`flex items-center justify-center w-10 h-10 sm:w-14 sm:h-14 font-bold text-lg select-none transition-colors
-                    ${isLight ? "bg-muted" : "bg-black"}
-                    ${isLight ? "text-primary" : "text-muted-foreground"}
-                    ${
-                      validMoves.includes(
-                        getSquare(
-                          color === "black" ? 7 - i : i,
-                          color === "black" ? 7 - j : j
-                        )
-                      )
-                        ? `shadow-[4px_4px_12px_0_rgba(0,0,0,0.35)] relative`
-                        : ""
-                    }
-                    ${
-                      validMoves.includes(
+                  key={rank}
+                  className="h-10 sm:h-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
+                  style={{ height: "3.5rem" }}
+                >
+                  {rank}
+                </div>
+              ))}
+            </div>
+            {/* Board */}
+            <div className="grid grid-cols-8 grid-rows-8 gap-0.5 border-2 border-border rounded-lg overflow-hidden shadow-lg">
+              {displayBoard.map((row, i) =>
+                row.map((square, j) => {
+                  const isLight = (i + j) % 2 === 1;
+                  const piece = square
+                    ? `${square.color.toUpperCase()}${square.type.toUpperCase()}`
+                    : "";
+                  const pieceImage = getPiece(PIECES_STYLE, piece);
+                  return (
+                    <div
+                      key={`${i}-${j}`}
+                      className={`flex items-center justify-center w-10 h-10 sm:w-14 sm:h-14 font-bold text-lg select-none transition-colors
+                        ${isLight ? "bg-muted" : "bg-black"}
+                        ${isLight ? "text-primary" : "text-muted-foreground"}
+                        ${
+                          validMoves.includes(
+                            getSquare(
+                              color === "black" ? 7 - i : i,
+                              color === "black" ? 7 - j : j
+                            )
+                          )
+                            ? `shadow-[4px_4px_12px_0_rgba(0,0,0,0.35)] relative`
+                            : ""
+                        }
+                        ${
+                          validMoves.includes(
+                            getSquare(
+                              color === "black" ? 7 - i : i,
+                              color === "black" ? 7 - j : j
+                            )
+                          ) &&
+                          chessRef.current
+                            .moves({ square: dragged?.from, verbose: true })
+                            ?.some(
+                              (m) =>
+                                m.to ===
+                                  getSquare(
+                                    color === "black" ? 7 - i : i,
+                                    color === "black" ? 7 - j : j
+                                  ) && m.captured
+                            )
+                            ? "bg-red-200"
+                            : ""
+                        }
+                        ${
+                          // Highlight king in check
+                          (() => {
+                            const chess = chessRef.current;
+                            if (!chess.inCheck()) return "";
+                            // Find the king's square for the side to move
+                            const turn = chess.turn();
+                            for (let row = 0; row < 8; row++) {
+                              for (let col = 0; col < 8; col++) {
+                                const sq = chess.board()[row][col];
+                                if (
+                                  sq &&
+                                  sq.type === "k" &&
+                                  sq.color === turn
+                                ) {
+                                  if (
+                                    getSquare(row, col) ===
+                                    getSquare(
+                                      color === "black" ? 7 - i : i,
+                                      color === "black" ? 7 - j : j
+                                    )
+                                  ) {
+                                    return "bg-red-200";
+                                  }
+                                }
+                              }
+                            }
+                            return "";
+                          })()
+                        }
+                      `}
+                      onDrop={() => handleDrop(i, j)}
+                      onDragOver={(e) => handleDragOver(e, i, j)}
+                    >
+                      {validMoves.includes(
                         getSquare(
                           color === "black" ? 7 - i : i,
                           color === "black" ? 7 - j : j
                         )
                       ) &&
-                      chessRef.current
-                        .moves({ square: dragged?.from, verbose: true })
-                        ?.some(
-                          (m) =>
-                            m.to ===
-                              getSquare(
-                                color === "black" ? 7 - i : i,
-                                color === "black" ? 7 - j : j
-                              ) && m.captured
-                        )
-                        ? "bg-red-200"
-                        : ""
-                    }
-                    ${
-                      // Highlight king in check
-                      (() => {
-                        const chess = chessRef.current;
-                        if (!chess.inCheck()) return "";
-                        // Find the king's square for the side to move
-                        const turn = chess.turn();
-                        for (let row = 0; row < 8; row++) {
-                          for (let col = 0; col < 8; col++) {
-                            const sq = chess.board()[row][col];
-                            if (sq && sq.type === "k" && sq.color === turn) {
-                              if (
-                                getSquare(row, col) ===
-                                getSquare(
-                                  color === "black" ? 7 - i : i,
-                                  color === "black" ? 7 - j : j
-                                )
-                              ) {
-                                return "bg-red-200";
-                              }
-                            }
-                          }
-                        }
-                        return "";
-                      })()
-                    }
-                  `}
-                  onDrop={() => handleDrop(i, j)}
-                  onDragOver={(e) => handleDragOver(e, i, j)}
-                >
-                  {validMoves.includes(
-                    getSquare(
-                      color === "black" ? 7 - i : i,
-                      color === "black" ? 7 - j : j
-                    )
-                  ) &&
-                    !pieceImage && (
-                      <span
-                        className={`absolute w-3 h-3 rounded-full z-30 opacity-90 pointer-events-none
+                        !pieceImage && (
+                          <span
+                            className={`absolute w-3 h-3 rounded-full z-30 opacity-90 pointer-events-none
                         ${isLight ? "bg-black" : "bg-white"}
                       `}
-                        style={{
-                          left: "50%",
-                          top: "50%",
-                          transform: "translate(-50%, -50%)",
-                          boxShadow: "0 2px 6px 0 rgba(0,0,0,0.25)",
-                        }}
-                      />
-                    )}
-                  {pieceImage && (
-                    <Image
-                      src={pieceImage}
-                      alt={piece}
-                      width={50}
-                      height={50}
-                      draggable
-                      onDragStart={() => handleDragStart(i, j, piece)}
-                      onDragEnd={handleDragEnd}
-                    />
-                  )}
-                </div>
-              );
-            })
-          )}
+                            style={{
+                              left: "50%",
+                              top: "50%",
+                              transform: "translate(-50%, -50%)",
+                              boxShadow: "0 2px 6px 0 rgba(0,0,0,0.25)",
+                            }}
+                          />
+                        )}
+                      {pieceImage && (
+                        <Image
+                          src={pieceImage}
+                          alt={piece}
+                          width={50}
+                          height={50}
+                          draggable
+                          onDragStart={() => handleDragStart(i, j, piece)}
+                          onDragEnd={handleDragEnd}
+                        />
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          {/* Files (bottom) */}
+          <div className="flex gap-0.5 mt-1">
+            {/* Spacer for rank numbers */}
+            <div className="w-6 sm:w-8" />
+            {files.map((file) => (
+              <div
+                key={file}
+                className="w-10 sm:w-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
+                style={{ width: "3.5rem" }}
+              >
+                {file}
+              </div>
+            ))}
+          </div>
         </div>
         {/* Bottom Player */}
         <div className="flex flex-col items-center mt-4">
