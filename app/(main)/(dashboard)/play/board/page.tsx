@@ -15,6 +15,7 @@ import Image from "next/image";
 import { useRef, useState } from "react";
 import { Chess, Square } from "chess.js";
 import { useSearchParams } from "next/navigation";
+import { useUser } from "reactfire";
 
 const PIECES_STYLE = "governer";
 
@@ -36,6 +37,7 @@ function getSquare(i: number, j: number) {
 
 export default function ChessBoardPage() {
   const searchParams = useSearchParams();
+  const { data: user } = useUser();
   const color = searchParams?.get("color") === "black" ? "black" : "white";
   const chessRef = useRef(new Chess());
   const [board, setBoard] = useState(chessRef.current.board());
@@ -277,11 +279,17 @@ export default function ChessBoardPage() {
         {/* Bottom Player */}
         <div className="flex flex-col items-center mt-4">
           <Avatar className="h-14 w-14 mb-2">
-            <AvatarImage src={PLAYER_WHITE.avatar} alt={PLAYER_WHITE.name} />
-            <AvatarFallback>WK</AvatarFallback>
+            <AvatarImage
+              src={user?.photoURL || "/avatars/01.png"}
+              alt={user?.displayName || ""}
+            />
+            <AvatarFallback>
+              {user?.displayName?.split(" ")[0]?.slice(0, 1) ?? ""}
+              {user?.displayName?.split(" ")[1]?.slice(0, 1) ?? ""}
+            </AvatarFallback>
           </Avatar>
           <span className="font-semibold text-lg text-muted-foreground">
-            {PLAYER_WHITE.name}
+            {user?.displayName?.split(" ")[0] || "White Player"}
           </span>
         </div>
       </Card>
