@@ -15,7 +15,11 @@ import Image from "next/image";
 import { useRef, useState } from "react";
 import { Chess, Square } from "chess.js";
 import { useSearchParams } from "next/navigation";
-import { useUser } from "reactfire";
+import { useUser, useAuth, useFirestore } from "reactfire";
+import { GameState, subscribeToGame, makeMove } from "@/lib/firebase-game";
+import { useEffect } from "react";
+import { GameStatus } from "@/components/game/game-status";
+import { toast } from "@/components/ui/use-toast";
 
 const PIECES_STYLE = "governer";
 
@@ -38,7 +42,13 @@ function getSquare(i: number, j: number) {
 export default function ChessBoardPage() {
   const searchParams = useSearchParams();
   const { data: user } = useUser();
+  const auth = useAuth();
+  const firestore = useFirestore();
+
+  const gameId = searchParams?.get("gameId");
   const color = searchParams?.get("color") === "black" ? "black" : "white";
+  const isOnlineGame = !!gameId;
+
   const chessRef = useRef(new Chess());
   const [board, setBoard] = useState(chessRef.current.board());
   const [moveHistory, setMoveHistory] = useState(
@@ -50,6 +60,55 @@ export default function ChessBoardPage() {
   } | null>(null);
   const [, setVersion] = useState(0); // dummy state to force re-render
   const [validMoves, setValidMoves] = useState<Square[]>([]);
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [isPlayerTurn, setIsPlayerTurn] = useState(true);
+
+  // Subscribe to Firebase game if it's an online game
+  useEffect(() => {
+    if (!isOnlineGame || !gameId || !auth.currentUser) {
+      setIsPlayerTurn(true); // Local game - always player's turn
+      return;
+    }
+
+    const unsubscribe = subscribeToGame(firestore, gameId, (game) => {
+      if (game) {
+        setGameState(game);
+
+        // Update chess board with current position
+        chessRef.current.load(game.fen);
+        setBoard(chessRef.current.board());
+
+        // For Firebase games, we need to reconstruct the game to get proper move history
+        // Create a new Chess instance and replay all moves
+        const tempChess = new Chess();
+        for (const move of game.moves) {
+          tempChess.move(move);
+        }
+        const reconstructedHistory = tempChess.history({ verbose: true });
+        console.log("Firebase game moves:", game.moves);
+        console.log("Reconstructed history:", reconstructedHistory);
+        setMoveHistory(reconstructedHistory);
+        setVersion((v) => v + 1);
+
+        // Determine if it's the player's turn
+        const userColor =
+          game.whitePlayer?.uid === auth.currentUser?.uid ? "white" : "black";
+        const newIsPlayerTurn = game.currentTurn === userColor;
+
+        // Show toast notification when it becomes the player's turn
+        if (newIsPlayerTurn && !isPlayerTurn && gameState) {
+          toast({
+            title: "Your turn!",
+            description: "Make your move on the chess board.",
+          });
+        }
+
+        setIsPlayerTurn(newIsPlayerTurn);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [isOnlineGame, gameId, auth.currentUser, firestore]);
 
   // If black, flip the board
   const displayBoard =
@@ -66,6 +125,11 @@ export default function ChessBoardPage() {
       : ["a", "b", "c", "d", "e", "f", "g", "h"];
 
   const handleDragStart = (i: number, j: number, piece: string) => {
+    // For online games, check if it's the player's turn
+    if (isOnlineGame && !isPlayerTurn) {
+      return;
+    }
+
     // If black, flip indices
     const row = color === "black" ? 7 - i : i;
     const col = color === "black" ? 7 - j : j;
@@ -78,8 +142,16 @@ export default function ChessBoardPage() {
     setValidMoves(moves.map((m) => m.to));
   };
 
-  const handleDrop = (i: number, j: number) => {
+  const handleDrop = async (i: number, j: number) => {
     if (!dragged) return;
+
+    // For online games, check if it's the player's turn
+    if (isOnlineGame && !isPlayerTurn) {
+      setDragged(null);
+      setValidMoves([]);
+      return;
+    }
+
     const row = color === "black" ? 7 - i : i;
     const col = color === "black" ? 7 - j : j;
     const to = getSquare(row, col);
@@ -89,11 +161,31 @@ export default function ChessBoardPage() {
       setValidMoves([]);
       return;
     }
+
     const move = chessRef.current.move({ from: dragged.from, to });
     if (move) {
-      setBoard(chessRef.current.board());
-      setMoveHistory(chessRef.current.history({ verbose: true }));
-      setVersion((v) => v + 1); // force re-render
+      if (isOnlineGame && gameId && auth.currentUser) {
+        // Make move in Firebase
+        const newFen = chessRef.current.fen();
+        const result = await makeMove(
+          firestore,
+          gameId,
+          move.san,
+          newFen,
+          auth.currentUser
+        );
+
+        if (!result.success) {
+          // Revert the move if Firebase update failed
+          chessRef.current.undo();
+          console.error("Failed to make move:", result.error);
+        }
+      } else {
+        // Local game - update immediately
+        setBoard(chessRef.current.board());
+        setMoveHistory(chessRef.current.history({ verbose: true }));
+        setVersion((v) => v + 1); // force re-render
+      }
     }
     setDragged(null);
     setValidMoves([]);
@@ -118,47 +210,93 @@ export default function ChessBoardPage() {
   };
 
   return (
-    <div className="flex flex-col md:flex-row items-center justify-center min-h-[80vh] gap-8 p-4">
-      {/* Chess Board and Players */}
-      <Card className="p-6 flex flex-col items-center shadow-xl bg-background/80">
-        {/* Top Player */}
-        <div className="flex flex-col items-center mb-4">
-          <Avatar className="h-14 w-14 mb-2">
-            <AvatarImage src={PLAYER_BLACK.avatar} alt={PLAYER_BLACK.name} />
-            <AvatarFallback>BK</AvatarFallback>
-          </Avatar>
-          <span className="font-semibold text-lg text-muted-foreground">
-            {PLAYER_BLACK.name}
-          </span>
+    <div className="flex flex-col items-center justify-center min-h-[80vh] gap-4 p-4">
+      {/* Game Status for Online Games */}
+      {isOnlineGame && (
+        <div className="w-full max-w-2xl">
+          <GameStatus
+            gameState={gameState}
+            isOnlineGame={isOnlineGame}
+            isPlayerTurn={isPlayerTurn}
+            userColor={color}
+          />
         </div>
-        {/* Chess Board with ranks and files */}
-        <div className="relative">
-          <div className="flex">
-            {/* Ranks (left) */}
-            <div className="flex flex-col justify-between w-6 sm:w-8 select-none">
-              {ranks.map((rank) => (
-                <div
-                  key={rank}
-                  className="h-10 sm:h-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
-                  style={{ height: "3.5rem" }}
-                >
-                  {rank}
-                </div>
-              ))}
-            </div>
-            {/* Board */}
-            <div className="grid grid-cols-8 grid-rows-8 gap-0.5 border-2 border-border rounded-lg overflow-hidden shadow-lg">
-              {displayBoard.map((row, i) =>
-                row.map((square, j) => {
-                  const isLight = (i + j) % 2 === 1;
-                  const piece = square
-                    ? `${square.color.toUpperCase()}${square.type.toUpperCase()}`
-                    : "";
-                  const pieceImage = getPiece(PIECES_STYLE, piece);
-                  return (
-                    <div
-                      key={`${i}-${j}`}
-                      className={`flex items-center justify-center w-10 h-10 sm:w-14 sm:h-14 font-bold text-lg select-none transition-colors
+      )}
+
+      <div className="flex flex-col md:flex-row items-center justify-center gap-8">
+        {/* Chess Board and Players */}
+        <Card className="p-6 flex flex-col items-center shadow-xl bg-background/80">
+          {/* Top Player */}
+          <div className="flex flex-col items-center mb-4">
+            <Avatar className="h-14 w-14 mb-2">
+              <AvatarImage
+                src={
+                  isOnlineGame && gameState
+                    ? color === "white"
+                      ? gameState.blackPlayer?.email
+                      : gameState.whitePlayer?.email
+                    : PLAYER_BLACK.avatar
+                }
+                alt={
+                  isOnlineGame && gameState
+                    ? (color === "white"
+                        ? gameState.blackPlayer?.displayName
+                        : gameState.whitePlayer?.displayName) || "Opponent"
+                    : PLAYER_BLACK.name
+                }
+              />
+              <AvatarFallback>
+                {isOnlineGame && gameState
+                  ? (color === "white"
+                      ? gameState.blackPlayer?.displayName
+                      : gameState.whitePlayer?.displayName
+                    )
+                      ?.slice(0, 2)
+                      .toUpperCase() || "OP"
+                  : "BK"}
+              </AvatarFallback>
+            </Avatar>
+            <span className="font-semibold text-lg text-muted-foreground">
+              {isOnlineGame && gameState
+                ? (color === "white"
+                    ? gameState.blackPlayer?.displayName
+                    : gameState.whitePlayer?.displayName) || "Opponent"
+                : PLAYER_BLACK.name}
+            </span>
+            {isOnlineGame && !isPlayerTurn && (
+              <span className="text-xs text-green-600 font-medium">
+                Their turn
+              </span>
+            )}
+          </div>
+          {/* Chess Board with ranks and files */}
+          <div className="relative">
+            <div className="flex">
+              {/* Ranks (left) */}
+              <div className="flex flex-col justify-between w-6 sm:w-8 select-none">
+                {ranks.map((rank) => (
+                  <div
+                    key={rank}
+                    className="h-10 sm:h-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
+                    style={{ height: "3.5rem" }}
+                  >
+                    {rank}
+                  </div>
+                ))}
+              </div>
+              {/* Board */}
+              <div className="grid grid-cols-8 grid-rows-8 gap-0.5 border-2 border-border rounded-lg overflow-hidden shadow-lg">
+                {displayBoard.map((row, i) =>
+                  row.map((square, j) => {
+                    const isLight = (i + j) % 2 === 1;
+                    const piece = square
+                      ? `${square.color.toUpperCase()}${square.type.toUpperCase()}`
+                      : "";
+                    const pieceImage = getPiece(PIECES_STYLE, piece);
+                    return (
+                      <div
+                        key={`${i}-${j}`}
+                        className={`flex items-center justify-center w-10 h-10 sm:w-14 sm:h-14 font-bold text-lg select-none transition-colors
                         ${isLight ? "bg-muted" : "bg-black"}
                         ${isLight ? "text-primary" : "text-muted-foreground"}
                         ${
@@ -222,110 +360,116 @@ export default function ChessBoardPage() {
                           })()
                         }
                       `}
-                      onDrop={() => handleDrop(i, j)}
-                      onDragOver={(e) => handleDragOver(e, i, j)}
-                    >
-                      {validMoves.includes(
-                        getSquare(
-                          color === "black" ? 7 - i : i,
-                          color === "black" ? 7 - j : j
-                        )
-                      ) &&
-                        !pieceImage && (
-                          <span
-                            className={`absolute w-3 h-3 rounded-full z-30 opacity-90 pointer-events-none
+                        onDrop={() => handleDrop(i, j)}
+                        onDragOver={(e) => handleDragOver(e, i, j)}
+                      >
+                        {validMoves.includes(
+                          getSquare(
+                            color === "black" ? 7 - i : i,
+                            color === "black" ? 7 - j : j
+                          )
+                        ) &&
+                          !pieceImage && (
+                            <span
+                              className={`absolute w-3 h-3 rounded-full z-30 opacity-90 pointer-events-none
                         ${isLight ? "bg-black" : "bg-white"}
                       `}
-                            style={{
-                              left: "50%",
-                              top: "50%",
-                              transform: "translate(-50%, -50%)",
-                              boxShadow: "0 2px 6px 0 rgba(0,0,0,0.25)",
-                            }}
+                              style={{
+                                left: "50%",
+                                top: "50%",
+                                transform: "translate(-50%, -50%)",
+                                boxShadow: "0 2px 6px 0 rgba(0,0,0,0.25)",
+                              }}
+                            />
+                          )}
+                        {pieceImage && (
+                          <Image
+                            src={pieceImage}
+                            alt={piece}
+                            width={50}
+                            height={50}
+                            draggable
+                            onDragStart={() => handleDragStart(i, j, piece)}
+                            onDragEnd={handleDragEnd}
                           />
                         )}
-                      {pieceImage && (
-                        <Image
-                          src={pieceImage}
-                          alt={piece}
-                          width={50}
-                          height={50}
-                          draggable
-                          onDragStart={() => handleDragStart(i, j, piece)}
-                          onDragEnd={handleDragEnd}
-                        />
-                      )}
-                    </div>
-                  );
-                })
-              )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            {/* Files (bottom) */}
+            <div className="flex gap-0.5 mt-1">
+              {/* Spacer for rank numbers */}
+              <div className="w-6 sm:w-8" />
+              {files.map((file) => (
+                <div
+                  key={file}
+                  className="w-10 sm:w-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
+                  style={{ width: "3.5rem" }}
+                >
+                  {file}
+                </div>
+              ))}
             </div>
           </div>
-          {/* Files (bottom) */}
-          <div className="flex gap-0.5 mt-1">
-            {/* Spacer for rank numbers */}
-            <div className="w-6 sm:w-8" />
-            {files.map((file) => (
-              <div
-                key={file}
-                className="w-10 sm:w-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
-                style={{ width: "3.5rem" }}
-              >
-                {file}
-              </div>
-            ))}
+          {/* Bottom Player */}
+          <div className="flex flex-col items-center mt-4">
+            <Avatar className="h-14 w-14 mb-2">
+              <AvatarImage
+                src={user?.photoURL || "/avatars/01.png"}
+                alt={user?.displayName || ""}
+              />
+              <AvatarFallback>
+                {user?.displayName?.split(" ")[0]?.slice(0, 1) ?? ""}
+                {user?.displayName?.split(" ")[1]?.slice(0, 1) ?? ""}
+              </AvatarFallback>
+            </Avatar>
+            <span className="font-semibold text-lg text-muted-foreground">
+              {user?.displayName?.split(" ")[0] || "You"}
+            </span>
+            {isOnlineGame && isPlayerTurn && (
+              <span className="text-xs text-blue-600 font-medium">
+                Your turn
+              </span>
+            )}
           </div>
-        </div>
-        {/* Bottom Player */}
-        <div className="flex flex-col items-center mt-4">
-          <Avatar className="h-14 w-14 mb-2">
-            <AvatarImage
-              src={user?.photoURL || "/avatars/01.png"}
-              alt={user?.displayName || ""}
-            />
-            <AvatarFallback>
-              {user?.displayName?.split(" ")[0]?.slice(0, 1) ?? ""}
-              {user?.displayName?.split(" ")[1]?.slice(0, 1) ?? ""}
-            </AvatarFallback>
-          </Avatar>
-          <span className="font-semibold text-lg text-muted-foreground">
-            {user?.displayName?.split(" ")[0] || "White Player"}
-          </span>
-        </div>
-      </Card>
-      {/* Move List */}
-      <Card className="w-full max-w-xs md:max-w-sm shadow-xl bg-background/80">
-        <CardHeader>
-          <CardTitle className="text-xl">Move List</CardTitle>
-        </CardHeader>
-        <Separator />
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12">#</TableHead>
-                <TableHead>White</TableHead>
-                <TableHead>Black</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(() => {
-                const rows = [];
-                for (let i = 0; i < moveHistory.length; i += 2) {
-                  rows.push(
-                    <TableRow key={i / 2}>
-                      <TableCell>{i / 2 + 1}</TableCell>
-                      <TableCell>{moveHistory[i]?.san || ""}</TableCell>
-                      <TableCell>{moveHistory[i + 1]?.san || ""}</TableCell>
-                    </TableRow>
-                  );
-                }
-                return rows;
-              })()}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        </Card>
+        {/* Move List */}
+        <Card className="w-full max-w-xs md:max-w-sm shadow-xl bg-background/80">
+          <CardHeader>
+            <CardTitle className="text-xl">Move List</CardTitle>
+          </CardHeader>
+          <Separator />
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">#</TableHead>
+                  <TableHead>White</TableHead>
+                  <TableHead>Black</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(() => {
+                  const rows = [];
+                  for (let i = 0; i < moveHistory.length; i += 2) {
+                    rows.push(
+                      <TableRow key={i / 2}>
+                        <TableCell>{i / 2 + 1}</TableCell>
+                        <TableCell>{moveHistory[i]?.san || ""}</TableCell>
+                        <TableCell>{moveHistory[i + 1]?.san || ""}</TableCell>
+                      </TableRow>
+                    );
+                  }
+                  return rows;
+                })()}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
