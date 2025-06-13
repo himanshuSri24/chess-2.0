@@ -22,6 +22,19 @@ export default function GamePage() {
   const router = useRouter();
   const auth = useAuth();
   const firestore = useFirestore();
+
+  // Handle potential null params
+  if (!params || !params.gameCode) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[80vh] gap-4">
+        <h2 className="text-2xl font-bold text-destructive">
+          Invalid game URL
+        </h2>
+        <Button onClick={() => router.push("/play")}>Back to Play</Button>
+      </div>
+    );
+  }
+
   const gameCode = params.gameCode as string;
 
   const [game, setGame] = useState<GameState | null>(null);
