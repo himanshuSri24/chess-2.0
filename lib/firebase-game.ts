@@ -35,6 +35,7 @@ export interface GameState {
   result?: "white-wins" | "black-wins" | "draw" | "abandoned";
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  invinciblePieces?: Array<{ color: "w" | "b"; type: string }>;
 }
 
 export const createGame = async (
@@ -248,5 +249,39 @@ export const makeMove = async (
     return { success: true };
   } catch (error) {
     return { success: false, error: "Failed to make move" };
+  }
+};
+
+export const updateInvinciblePieces = async (
+  firestore: any,
+  gameId: string,
+  invinciblePieces: Array<{ color: "w" | "b"; type: string }>
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    await updateDoc(doc(firestore, "games", gameId), {
+      invinciblePieces,
+      updatedAt: Timestamp.now(),
+    });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: "Failed to update invincible pieces" };
+  }
+};
+
+export const updateGameStatus = async (
+  firestore: any,
+  gameId: string,
+  status: "active" | "completed",
+  result: "white-wins" | "black-wins" | "draw" | "abandoned"
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    await updateDoc(doc(firestore, "games", gameId), {
+      status,
+      result,
+      updatedAt: Timestamp.now(),
+    });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: "Failed to update game status" };
   }
 };

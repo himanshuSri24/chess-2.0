@@ -81,7 +81,7 @@ export const NavbarUserLinks: FC<Props> = ({ onSignIn }) => {
           <UserNav />
         </>
       ) : (
-        <>
+        <div className="flex justify-center align-center">
           <Button
             className="w-full"
             disabled={isLoading}
@@ -92,7 +92,7 @@ export const NavbarUserLinks: FC<Props> = ({ onSignIn }) => {
           >
             Login / Register
           </Button>
-        </>
+        </div>
       )}
     </>
   );

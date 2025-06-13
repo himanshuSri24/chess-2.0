@@ -13,13 +13,32 @@ import { Separator } from "@/components/ui/separator";
 import { getPiece } from "@/lib/utils";
 import Image from "next/image";
 import { useRef, useState } from "react";
-import { Chess, Square } from "chess.js";
-import { useSearchParams } from "next/navigation";
+import { Chess, Square, Move } from "chess.js";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useUser, useAuth, useFirestore } from "reactfire";
-import { GameState, subscribeToGame, makeMove } from "@/lib/firebase-game";
+import {
+  GameState,
+  subscribeToGame,
+  makeMove,
+  updateInvinciblePieces,
+  updateGameStatus,
+} from "@/lib/firebase-game";
 import { useEffect } from "react";
 import { GameStatus } from "@/components/game/game-status";
 import { toast } from "@/components/ui/use-toast";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 
 const PIECES_STYLE = "governer";
 
@@ -39,11 +58,40 @@ function getSquare(i: number, j: number) {
   return `${file}${rank}` as Square;
 }
 
+// Add helper to check for checkmate respecting invincible pieces
+function isCheckmateRespectingInvincible(
+  chess: Chess,
+  invinciblePieces: Array<{ color: "w" | "b"; type: string }>
+) {
+  if (!chess.inCheck()) return false;
+  const moves = chess.moves({ verbose: true }) as Move[];
+  if (invinciblePieces.length === 0) return chess.isCheckmate();
+  // Find all invincible squares
+  const board = chess.board();
+  let invincibleSquares: Square[] = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const sq = board[r][c];
+      if (
+        sq &&
+        invinciblePieces.some((p) => p.type === sq.type && p.color === sq.color)
+      ) {
+        invincibleSquares.push(getSquare(r, c));
+      }
+    }
+  }
+  // Only allow moves that do not capture invincible pieces
+  const legalMoves = moves.filter((m) => !invincibleSquares.includes(m.to));
+  // If no legal moves and in check, it's checkmate
+  return legalMoves.length === 0;
+}
+
 export default function ChessBoardPage() {
   const searchParams = useSearchParams();
   const { data: user } = useUser();
   const auth = useAuth();
   const firestore = useFirestore();
+  const router = useRouter();
 
   const gameId = searchParams?.get("gameId");
   const color = searchParams?.get("color") === "black" ? "black" : "white";
@@ -62,6 +110,26 @@ export default function ChessBoardPage() {
   const [validMoves, setValidMoves] = useState<Square[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isPlayerTurn, setIsPlayerTurn] = useState(true);
+  // Invincibility feature state
+  const [invincibleDialogOpen, setInvincibleDialogOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [invinciblePieces, setInvinciblePieces] = useState<
+    Array<{ color: "w" | "b"; type: string }>
+  >([]);
+  const INVINCIBLE_PASSWORD = "nikshu";
+  // Add promotion UI state
+  const [promotionDialog, setPromotionDialog] = useState<null | {
+    from: Square;
+    to: Square;
+  }>(null);
+  const [promotionChoice, setPromotionChoice] = useState<"q" | "r" | "b" | "n">(
+    "q"
+  );
+  const [gameOverDialog, setGameOverDialog] = useState<{
+    winner: string | null;
+    result: string | null;
+  } | null>(null);
 
   // Subscribe to Firebase game if it's an online game
   useEffect(() => {
@@ -73,7 +141,29 @@ export default function ChessBoardPage() {
     const unsubscribe = subscribeToGame(firestore, gameId, (game) => {
       if (game) {
         setGameState(game);
-
+        // Show game over dialog if game is completed
+        if (game.status === "completed") {
+          let winner = null;
+          let result: "white-wins" | "black-wins" | "draw" | "abandoned" =
+            "draw";
+          if (game.result === "white-wins") {
+            winner = game.whitePlayer?.displayName || "White";
+            result = "white-wins";
+          }
+          if (game.result === "black-wins") {
+            winner = game.blackPlayer?.displayName || "Black";
+            result = "black-wins";
+          }
+          if (game.result === "draw") {
+            result = "draw";
+          }
+          if (game.result === "abandoned") {
+            result = "abandoned";
+          }
+          setGameOverDialog({ winner, result });
+        } else {
+          setGameOverDialog(null);
+        }
         // Update chess board with current position
         chessRef.current.load(game.fen);
         setBoard(chessRef.current.board());
@@ -89,6 +179,9 @@ export default function ChessBoardPage() {
         console.log("Reconstructed history:", reconstructedHistory);
         setMoveHistory(reconstructedHistory);
         setVersion((v) => v + 1);
+
+        // Sync invinciblePieces from Firestore
+        setInvinciblePieces(game.invinciblePieces || []);
 
         // Determine if it's the player's turn
         const userColor =
@@ -124,6 +217,25 @@ export default function ChessBoardPage() {
       ? ["h", "g", "f", "e", "d", "c", "b", "a"]
       : ["a", "b", "c", "d", "e", "f", "g", "h"];
 
+  const handleToggleInvincible = async (color: "w" | "b", type: string) => {
+    let newInvinciblePieces: Array<{ color: "w" | "b"; type: string }>;
+    const exists = invinciblePieces.some(
+      (p) => p.color === color && p.type === type
+    );
+    if (exists) {
+      newInvinciblePieces = invinciblePieces.filter(
+        (p) => !(p.color === color && p.type === type)
+      );
+    } else {
+      newInvinciblePieces = [...invinciblePieces, { color, type }];
+    }
+    setInvinciblePieces(newInvinciblePieces);
+    // If online game, update Firestore
+    if (isOnlineGame && gameId) {
+      await updateInvinciblePieces(firestore, gameId, newInvinciblePieces);
+    }
+  };
+
   const handleDragStart = (i: number, j: number, piece: string) => {
     // For online games, check if it's the player's turn
     if (isOnlineGame && !isPlayerTurn) {
@@ -136,15 +248,43 @@ export default function ChessBoardPage() {
     const from = getSquare(row, col);
     setDragged({ from, piece });
     // Get valid moves for this piece
-    const moves = chessRef.current.moves({ square: from, verbose: true }) as {
+    let moves = chessRef.current.moves({ square: from, verbose: true }) as {
       to: Square;
+      captured?: string;
     }[];
+
+    // --- Invincibility Rule (multi) ---
+    if (invinciblePieces.length > 0) {
+      const board = chessRef.current.board();
+      let invincibleSquares: Square[] = [];
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const sq = board[r][c];
+          if (
+            sq &&
+            invinciblePieces.some(
+              (p) => p.type === sq.type && p.color === sq.color
+            )
+          ) {
+            invincibleSquares.push(getSquare(r, c));
+          }
+        }
+      }
+      moves = moves.filter((m) => !invincibleSquares.includes(m.to));
+    }
+    // --- End Invincibility Rule ---
+
     setValidMoves(moves.map((m) => m.to));
   };
 
   const handleDrop = async (i: number, j: number) => {
     if (!dragged) return;
-
+    // Prevent moves if game is over
+    if (gameState && gameState.status === "completed") {
+      setDragged(null);
+      setValidMoves([]);
+      return;
+    }
     // For online games, check if it's the player's turn
     if (isOnlineGame && !isPlayerTurn) {
       setDragged(null);
@@ -162,6 +302,41 @@ export default function ChessBoardPage() {
       return;
     }
 
+    // --- Promotion fix: block promotion if destination is invincible ---
+    const piece = chessRef.current.get(dragged.from);
+    if (piece && piece.type === "p" && (to.endsWith("8") || to.endsWith("1"))) {
+      // Only allow promotion if destination is not invincible
+      const board = chessRef.current.board();
+      let invincibleSquares: Square[] = [];
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const sq = board[r][c];
+          if (
+            sq &&
+            invinciblePieces.some(
+              (p) => p.type === sq.type && p.color === sq.color
+            )
+          ) {
+            invincibleSquares.push(getSquare(r, c));
+          }
+        }
+      }
+      if (invincibleSquares.includes(to)) {
+        toast({
+          title: "Promotion blocked",
+          description: "Cannot promote to a square with an invincible piece.",
+        });
+        setDragged(null);
+        setValidMoves([]);
+        return;
+      }
+      // Show promotion dialog
+      setPromotionDialog({ from: dragged.from, to });
+      setDragged(null);
+      setValidMoves([]);
+      return;
+    }
+
     const move = chessRef.current.move({ from: dragged.from, to });
     if (move) {
       if (isOnlineGame && gameId && auth.currentUser) {
@@ -174,7 +349,6 @@ export default function ChessBoardPage() {
           newFen,
           auth.currentUser
         );
-
         if (!result.success) {
           // Revert the move if Firebase update failed
           chessRef.current.undo();
@@ -186,6 +360,17 @@ export default function ChessBoardPage() {
         setMoveHistory(chessRef.current.history({ verbose: true }));
         setVersion((v) => v + 1); // force re-render
       }
+      // --- Custom checkmate logic ---
+      if (isCheckmateRespectingInvincible(chessRef.current, invinciblePieces)) {
+        let winner = chessRef.current.turn() === "w" ? "Black" : "White";
+        let resultKey: "white-wins" | "black-wins" =
+          chessRef.current.turn() === "w" ? "black-wins" : "white-wins";
+        setGameOverDialog({ winner, result: resultKey });
+        if (isOnlineGame && gameId) {
+          await updateGameStatus(firestore, gameId, "completed", resultKey);
+        }
+      }
+      // --- End custom checkmate logic ---
     }
     setDragged(null);
     setValidMoves([]);
@@ -223,7 +408,7 @@ export default function ChessBoardPage() {
         </div>
       )}
 
-      <div className="flex flex-col md:flex-row items-center justify-center gap-8">
+      <div className="flex flex-col md:flex-row items-stretch justify-center gap-8">
         {/* Chess Board and Players */}
         <Card className="p-6 flex flex-col items-center shadow-xl bg-background/80">
           {/* Top Player */}
@@ -277,8 +462,7 @@ export default function ChessBoardPage() {
                 {ranks.map((rank) => (
                   <div
                     key={rank}
-                    className="h-10 sm:h-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
-                    style={{ height: "3.5rem" }}
+                    className="h-12 sm:h-14 md:h-16 flex items-center justify-center text-xs text-muted-foreground font-bold"
                   >
                     {rank}
                   </div>
@@ -296,7 +480,7 @@ export default function ChessBoardPage() {
                     return (
                       <div
                         key={`${i}-${j}`}
-                        className={`flex items-center justify-center w-10 h-10 sm:w-14 sm:h-14 font-bold text-lg select-none transition-colors
+                        className={`flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 md:w-16 md:h-16 font-bold text-lg select-none transition-colors
                         ${isLight ? "bg-muted" : "bg-black"}
                         ${isLight ? "text-primary" : "text-muted-foreground"}
                         ${
@@ -406,8 +590,7 @@ export default function ChessBoardPage() {
               {files.map((file) => (
                 <div
                   key={file}
-                  className="w-10 sm:w-14 flex items-center justify-center text-xs text-muted-foreground font-bold"
-                  style={{ width: "3.5rem" }}
+                  className="w-12 sm:w-14 md:w-16 flex items-center justify-center text-xs text-muted-foreground font-bold"
                 >
                   {file}
                 </div>
@@ -437,7 +620,110 @@ export default function ChessBoardPage() {
           </div>
         </Card>
         {/* Move List */}
-        <Card className="w-full max-w-xs md:max-w-sm shadow-xl bg-background/80">
+        <Card className="w-full md:w-[400px] lg:w-[500px] max-w-lg shadow-xl bg-background/80">
+          {/* Invincibility Button and Dialog */}
+          <div className="w-full flex justify-end max-w-2xl">
+            <Dialog
+              open={invincibleDialogOpen}
+              onOpenChange={setInvincibleDialogOpen}
+            >
+              <DialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  style={{ width: "100%" }}
+                  onClick={() => setInvincibleDialogOpen(true)}
+                >
+                  Special Options
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Special Options</DialogTitle>
+                  <DialogDescription>
+                    {isAdmin
+                      ? "Select pieces to make invincible for this game."
+                      : "Enter password to access special options."}
+                  </DialogDescription>
+                </DialogHeader>
+                {!isAdmin ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (password === INVINCIBLE_PASSWORD) {
+                        setIsAdmin(true);
+                      } else {
+                        alert("Incorrect password");
+                      }
+                    }}
+                    className="space-y-4"
+                  >
+                    <Label htmlFor="invincible-password">Password</Label>
+                    <Input
+                      id="invincible-password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoFocus
+                    />
+                    <DialogFooter>
+                      <Button type="submit">Submit</Button>
+                    </DialogFooter>
+                  </form>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-2">
+                      <Label>Toggle Invincibility</Label>
+                      <div className="flex flex-col gap-2">
+                        {["w", "b"].map((color) => (
+                          <div key={color} className="flex flex-col gap-1">
+                            <span className="font-semibold text-sm mb-1">
+                              {color === "w" ? "White" : "Black"}
+                            </span>
+                            <div className="flex gap-2 flex-wrap">
+                              {[
+                                { label: "King", value: "k" },
+                                { label: "Queen", value: "q" },
+                                { label: "Rook", value: "r" },
+                                { label: "Bishop", value: "b" },
+                                { label: "Knight", value: "n" },
+                                { label: "Pawn", value: "p" },
+                              ].map((opt) => {
+                                const isOn = invinciblePieces.some(
+                                  (p) =>
+                                    p.color === color && p.type === opt.value
+                                );
+                                return (
+                                  <button
+                                    key={opt.value}
+                                    type="button"
+                                    className={`px-3 py-2 rounded-md border text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
+                                      isOn
+                                        ? "bg-green-600 text-white border-green-700"
+                                        : "bg-background text-foreground border-input hover:bg-accent"
+                                    }`}
+                                    onClick={() =>
+                                      handleToggleInvincible(
+                                        color as "w" | "b",
+                                        opt.value
+                                      )
+                                    }
+                                  >
+                                    {opt.label}{" "}
+                                    {isOn ? "(Invincible)" : "(Vulnerable)"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
+          </div>
           <CardHeader>
             <CardTitle className="text-xl">Move List</CardTitle>
           </CardHeader>
@@ -470,6 +756,132 @@ export default function ChessBoardPage() {
           </CardContent>
         </Card>
       </div>
+      {promotionDialog && (
+        <Dialog open={true} onOpenChange={() => setPromotionDialog(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Choose Promotion</DialogTitle>
+            </DialogHeader>
+            <div className="flex gap-2 justify-center my-4">
+              {[
+                { label: "Queen", value: "q" },
+                { label: "Rook", value: "r" },
+                { label: "Bishop", value: "b" },
+                { label: "Knight", value: "n" },
+              ].map((opt) => (
+                <Button
+                  key={opt.value}
+                  variant={
+                    promotionChoice === opt.value ? "default" : "outline"
+                  }
+                  onClick={() => setPromotionChoice(opt.value as any)}
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button
+                onClick={async () => {
+                  if (!promotionDialog) return;
+                  const { from, to } = promotionDialog;
+                  // Only allow promotion if destination is not invincible (double check)
+                  const board = chessRef.current.board();
+                  let invincibleSquares: Square[] = [];
+                  for (let r = 0; r < 8; r++) {
+                    for (let c = 0; c < 8; c++) {
+                      const sq = board[r][c];
+                      if (
+                        sq &&
+                        invinciblePieces.some(
+                          (p) => p.type === sq.type && p.color === sq.color
+                        )
+                      ) {
+                        invincibleSquares.push(getSquare(r, c));
+                      }
+                    }
+                  }
+                  if (invincibleSquares.includes(to)) {
+                    toast({
+                      title: "Promotion blocked",
+                      description:
+                        "Cannot promote to a square with an invincible piece.",
+                    });
+                    setPromotionDialog(null);
+                    return;
+                  }
+                  const move = chessRef.current.move({
+                    from,
+                    to,
+                    promotion: promotionChoice,
+                  });
+                  if (move) {
+                    if (isOnlineGame && gameId && auth.currentUser) {
+                      const newFen = chessRef.current.fen();
+                      const result = await makeMove(
+                        firestore,
+                        gameId,
+                        move.san,
+                        newFen,
+                        auth.currentUser
+                      );
+                      if (!result.success) {
+                        chessRef.current.undo();
+                        console.error("Failed to make move:", result.error);
+                      }
+                    } else {
+                      setBoard(chessRef.current.board());
+                      setMoveHistory(
+                        chessRef.current.history({ verbose: true })
+                      );
+                      setVersion((v) => v + 1);
+                    }
+                    if (
+                      isCheckmateRespectingInvincible(
+                        chessRef.current,
+                        invinciblePieces
+                      )
+                    ) {
+                      toast({ title: "Checkmate!", description: "Game over." });
+                      if (isOnlineGame && gameId) {
+                        await updateInvinciblePieces(
+                          firestore,
+                          gameId,
+                          invinciblePieces
+                        );
+                      }
+                    }
+                  }
+                  setPromotionDialog(null);
+                }}
+              >
+                Promote
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+      {gameOverDialog && (
+        <Dialog open={true} onOpenChange={() => {}}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Game Over</DialogTitle>
+            </DialogHeader>
+            <div className="text-center my-4">
+              {gameOverDialog.result === "draw" ? (
+                <span className="text-lg font-bold">It's a draw!</span>
+              ) : (
+                <span className="text-lg font-bold">
+                  {gameOverDialog.winner} wins by checkmate!
+                </span>
+              )}
+            </div>
+            <DialogFooter>
+              <Button onClick={() => router.push("/")}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
