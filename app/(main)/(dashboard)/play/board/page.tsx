@@ -130,6 +130,13 @@ export default function ChessBoardPage() {
     winner: string | null;
     result: string | null;
   } | null>(null);
+  // Move navigation state
+  const [viewingMoveIndex, setViewingMoveIndex] = useState<number | null>(null);
+  const [viewingBoard, setViewingBoard] = useState(chessRef.current.board());
+  const [highlightedSquares, setHighlightedSquares] = useState<{
+    from?: Square;
+    to?: Square;
+  }>({});
 
   // Subscribe to Firebase game if it's an online game
   useEffect(() => {
@@ -180,6 +187,13 @@ export default function ChessBoardPage() {
         setMoveHistory(reconstructedHistory);
         setVersion((v) => v + 1);
 
+        // Reset viewing position when game updates
+        if (viewingMoveIndex !== null) {
+          setViewingMoveIndex(null);
+          setViewingBoard(chessRef.current.board());
+          setHighlightedSquares({});
+        }
+
         // Sync invinciblePieces from Firestore
         setInvinciblePieces(game.invinciblePieces || []);
 
@@ -204,10 +218,11 @@ export default function ChessBoardPage() {
   }, [isOnlineGame, gameId, auth.currentUser, firestore]);
 
   // If black, flip the board
+  const currentBoard = viewingMoveIndex !== null ? viewingBoard : board;
   const displayBoard =
     color === "black"
-      ? [...board].reverse().map((row) => [...row].reverse())
-      : board;
+      ? [...currentBoard].reverse().map((row) => [...row].reverse())
+      : currentBoard;
 
   // For ranks and files display
   const ranks =
@@ -237,6 +252,10 @@ export default function ChessBoardPage() {
   };
 
   const handleDragStart = (i: number, j: number, piece: string) => {
+    // Don't allow moves when viewing historical positions
+    if (viewingMoveIndex !== null) {
+      return;
+    }
     // For online games, check if it's the player's turn
     if (isOnlineGame && !isPlayerTurn) {
       return;
@@ -279,6 +298,12 @@ export default function ChessBoardPage() {
 
   const handleDrop = async (i: number, j: number) => {
     if (!dragged) return;
+    // Don't allow moves when viewing historical positions
+    if (viewingMoveIndex !== null) {
+      setDragged(null);
+      setValidMoves([]);
+      return;
+    }
     // Prevent moves if game is over
     if (gameState && gameState.status === "completed") {
       setDragged(null);
@@ -359,6 +384,10 @@ export default function ChessBoardPage() {
         setBoard(chessRef.current.board());
         setMoveHistory(chessRef.current.history({ verbose: true }));
         setVersion((v) => v + 1); // force re-render
+        // Reset viewing position
+        setViewingMoveIndex(null);
+        setViewingBoard(chessRef.current.board());
+        setHighlightedSquares({});
       }
       // --- Custom checkmate logic ---
       if (isCheckmateRespectingInvincible(chessRef.current, invinciblePieces)) {
@@ -379,6 +408,39 @@ export default function ChessBoardPage() {
   const handleDragEnd = () => {
     setDragged(null);
     setValidMoves([]);
+  };
+
+  const handleMoveClick = (moveIndex: number) => {
+    if (moveIndex === viewingMoveIndex) {
+      // Clicking the same move again returns to current position
+      setViewingMoveIndex(null);
+      setViewingBoard(chessRef.current.board());
+      setHighlightedSquares({});
+      return;
+    }
+
+    // Create a new chess instance and replay moves up to the clicked move
+    const tempChess = new Chess();
+    for (let i = 0; i <= moveIndex; i++) {
+      if (moveHistory[i]) {
+        tempChess.move(moveHistory[i]);
+      }
+    }
+
+    // Get the move details for highlighting
+    const move = moveHistory[moveIndex];
+    const fromSquare = move?.from as Square;
+    const toSquare = move?.to as Square;
+
+    setViewingMoveIndex(moveIndex);
+    setViewingBoard(tempChess.board());
+    setHighlightedSquares({ from: fromSquare, to: toSquare });
+  };
+
+  const goToCurrentPosition = () => {
+    setViewingMoveIndex(null);
+    setViewingBoard(chessRef.current.board());
+    setHighlightedSquares({});
   };
 
   const handleDragOver = (
@@ -477,6 +539,15 @@ export default function ChessBoardPage() {
                       ? `${square.color.toUpperCase()}${square.type.toUpperCase()}`
                       : "";
                     const pieceImage = getPiece(PIECES_STYLE, piece);
+                    const currentSquare = getSquare(
+                      color === "black" ? 7 - i : i,
+                      color === "black" ? 7 - j : j
+                    );
+                    const isHighlightedFrom =
+                      highlightedSquares.from === currentSquare;
+                    const isHighlightedTo =
+                      highlightedSquares.to === currentSquare;
+
                     return (
                       <div
                         key={`${i}-${j}`}
@@ -484,32 +555,25 @@ export default function ChessBoardPage() {
                         ${isLight ? "bg-muted" : "bg-black"}
                         ${isLight ? "text-primary" : "text-muted-foreground"}
                         ${
-                          validMoves.includes(
-                            getSquare(
-                              color === "black" ? 7 - i : i,
-                              color === "black" ? 7 - j : j
-                            )
-                          )
+                          isHighlightedFrom
+                            ? "bg-yellow-300 dark:bg-yellow-600"
+                            : ""
+                        }
+                        ${
+                          isHighlightedTo
+                            ? "bg-green-300 dark:bg-green-600"
+                            : ""
+                        }
+                        ${
+                          validMoves.includes(currentSquare)
                             ? `shadow-[4px_4px_12px_0_rgba(0,0,0,0.35)] relative`
                             : ""
                         }
                         ${
-                          validMoves.includes(
-                            getSquare(
-                              color === "black" ? 7 - i : i,
-                              color === "black" ? 7 - j : j
-                            )
-                          ) &&
+                          validMoves.includes(currentSquare) &&
                           chessRef.current
                             .moves({ square: dragged?.from, verbose: true })
-                            ?.some(
-                              (m) =>
-                                m.to ===
-                                  getSquare(
-                                    color === "black" ? 7 - i : i,
-                                    color === "black" ? 7 - j : j
-                                  ) && m.captured
-                            )
+                            ?.some((m) => m.to === currentSquare && m.captured)
                             ? "bg-red-200"
                             : ""
                         }
@@ -528,13 +592,7 @@ export default function ChessBoardPage() {
                                   sq.type === "k" &&
                                   sq.color === turn
                                 ) {
-                                  if (
-                                    getSquare(row, col) ===
-                                    getSquare(
-                                      color === "black" ? 7 - i : i,
-                                      color === "black" ? 7 - j : j
-                                    )
-                                  ) {
+                                  if (getSquare(row, col) === currentSquare) {
                                     return "bg-red-200";
                                   }
                                 }
@@ -547,25 +605,19 @@ export default function ChessBoardPage() {
                         onDrop={() => handleDrop(i, j)}
                         onDragOver={(e) => handleDragOver(e, i, j)}
                       >
-                        {validMoves.includes(
-                          getSquare(
-                            color === "black" ? 7 - i : i,
-                            color === "black" ? 7 - j : j
-                          )
-                        ) &&
-                          !pieceImage && (
-                            <span
-                              className={`absolute w-3 h-3 rounded-full z-30 opacity-90 pointer-events-none
+                        {validMoves.includes(currentSquare) && !pieceImage && (
+                          <span
+                            className={`absolute w-3 h-3 rounded-full z-30 opacity-90 pointer-events-none
                         ${isLight ? "bg-black" : "bg-white"}
                       `}
-                              style={{
-                                left: "50%",
-                                top: "50%",
-                                transform: "translate(-50%, -50%)",
-                                boxShadow: "0 2px 6px 0 rgba(0,0,0,0.25)",
-                              }}
-                            />
-                          )}
+                            style={{
+                              left: "50%",
+                              top: "50%",
+                              transform: "translate(-50%, -50%)",
+                              boxShadow: "0 2px 6px 0 rgba(0,0,0,0.25)",
+                            }}
+                          />
+                        )}
                         {pieceImage && (
                           <Image
                             src={pieceImage}
@@ -724,8 +776,13 @@ export default function ChessBoardPage() {
               </DialogContent>
             </Dialog>
           </div>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-xl">Move List</CardTitle>
+            {viewingMoveIndex !== null && (
+              <Button variant="outline" size="sm" onClick={goToCurrentPosition}>
+                Current Position
+              </Button>
+            )}
           </CardHeader>
           <Separator />
           <CardContent className="p-0">
@@ -744,8 +801,34 @@ export default function ChessBoardPage() {
                     rows.push(
                       <TableRow key={i / 2}>
                         <TableCell>{i / 2 + 1}</TableCell>
-                        <TableCell>{moveHistory[i]?.san || ""}</TableCell>
-                        <TableCell>{moveHistory[i + 1]?.san || ""}</TableCell>
+                        <TableCell>
+                          {moveHistory[i] && (
+                            <button
+                              className={`text-left w-full px-2 py-1 rounded hover:bg-accent transition-colors ${
+                                viewingMoveIndex === i
+                                  ? "bg-blue-200 dark:bg-blue-800 text-blue-900 dark:text-blue-100"
+                                  : ""
+                              }`}
+                              onClick={() => handleMoveClick(i)}
+                            >
+                              {moveHistory[i].san}
+                            </button>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {moveHistory[i + 1] && (
+                            <button
+                              className={`text-left w-full px-2 py-1 rounded hover:bg-accent transition-colors ${
+                                viewingMoveIndex === i + 1
+                                  ? "bg-blue-200 dark:bg-blue-800 text-blue-900 dark:text-blue-100"
+                                  : ""
+                              }`}
+                              onClick={() => handleMoveClick(i + 1)}
+                            >
+                              {moveHistory[i + 1].san}
+                            </button>
+                          )}
+                        </TableCell>
                       </TableRow>
                     );
                   }
@@ -835,6 +918,9 @@ export default function ChessBoardPage() {
                         chessRef.current.history({ verbose: true })
                       );
                       setVersion((v) => v + 1);
+                      // Reset viewing position
+                      setViewingMoveIndex(null);
+                      setViewingBoard(chessRef.current.board());
                     }
                     if (
                       isCheckmateRespectingInvincible(
